@@ -77,3 +77,19 @@ a neutral, tamper-resistant acceptance oracle.
 - No token transfer logic is included (by design, and because GenLayer Studio
   does not currently support token transfers) — pairing this with an escrow
   contract that reads `get_job(job_id).status` is a natural extension.
+
+  ### Example: how the consensus closure looks
+
+```python
+def get_verdict() -> str:
+    page_text = gl.nondet.web.render(deliverable_url, mode="text")
+    prompt = self._evaluation_prompt(page_text, criteria)
+    raw = gl.nondet.exec_prompt(prompt, response_format="json")
+    return json.dumps(self._normalize_verdict(raw, criteria), sort_keys=True)
+
+agreed = gl.eq_principle.prompt_comparative(
+    get_verdict,
+    principle="status must be exactly the same; unmet_criteria may differ in wording only if they refer to the same underlying unmet criterion."
+)
+```
+Each GenLayer validator independently fetches the deliverable URL and queries its own LLM; `prompt_comparative` only accepts the result into consensus once validators agree under the stated principle.
