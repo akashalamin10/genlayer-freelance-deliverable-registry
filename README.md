@@ -4,33 +4,36 @@ A reusable GenLayer Intelligent Contract primitive for on-chain, consensus-verif
 freelance deliverable acceptance — usable by any freelance/marketplace platform as
 a neutral, tamper-resistant acceptance oracle.
 
+**Deployed contract (GenLayer Studio):** `0x6CBD78377Ee9D0EE6B5D34A8eA3D709DaD53b991`
+[View on Explorer](https://explorer-studio.genlayer.com/address/0x6CBD78377Ee9D0EE6B5D34A8eA3D709DaD53b991)
+
 ## Why this is a primitive, not a thin demo
 
 - **Real web access as part of consensus**: instead of trusting a submitted text
   blob, validators independently fetch the actual deliverable content from its URL
   via `gl.nondet.web.render` and evaluate that fetched content — this uses
   GenLayer's internet-access capability, not just LLM judgment on user-supplied text.
-- **Structured, closed-vocabulary consensus**: validators must agree on a
-  `(status, unmet_criteria)` pair via `gl.eq_principle.strict_eq` — a small, closed
-  status vocabulary (`accepted` / `needs_revision` / `rejected`) makes strict
-  equivalence realistically achievable, unlike asking for identical free text.
+- **Structured consensus with tolerance for wording**: validators must agree on a
+  `(status, unmet_criteria)` result via `gl.eq_principle.prompt_comparative`, with
+  an explicit principle describing what counts as agreement — the status must match
+  exactly, but `unmet_criteria` wording can vary as long as it refers to the same
+  underlying unmet item. This is more robust than requiring byte-identical LLM output.
 - **Revision lifecycle, not a single verdict**: `revision_count` and per-revision
   submission records let a job go through multiple rounds of feedback and
   resubmission — mirroring how real freelance work actually gets accepted.
 - **Independent dispute/contest round**: `contest_status` re-runs the whole
-  evaluation (including re-fetching the URL) from scratch with the freelancer's
+  evaluation (including re-fetching the URL) from scratch with the contester's
   counter-argument injected, rather than blindly trusting or re-running the same
   prompt. Reputation counters (`upheld` / `overturned`) track contest outcomes
   per address.
 - **Decoupled from payment**: the contract does not move funds itself — it exposes
   a verifiable, on-chain acceptance status that an external escrow/payment layer
-  (on this or another platform) can read and act on. This keeps the primitive
-  narrowly scoped and reusable rather than baking in one platform's payment logic.
+  can read and act on, keeping the primitive narrowly scoped and reusable.
 
 ## State design
 
 | Field         | Type                | Purpose                                             |
-|----------------|---------------------|------------------------------------------------------|
+|----------------|---------------------|--------------------------------------------------------|
 | `owner`        | `str`               | Platform/admin address                               |
 | `jobs`         | `TreeMap[str, str]` | job_id -> JSON {client, freelancer, criteria, status, revision_count} |
 | `submissions`  | `TreeMap[str, str]` | "job_id:revision_number" -> JSON submission record   |
@@ -42,30 +45,67 @@ a neutral, tamper-resistant acceptance oracle.
 1. `submit_deliverable` builds a closure that (a) fetches the deliverable URL via
    `gl.nondet.web.render`, (b) prompts an LLM to classify it against the job's
    criteria into `{status, unmet_criteria}`.
-2. `gl.eq_principle.strict_eq` re-runs this closure across validators and only
-   accepts the result if they all agree on the same `(status, unmet_criteria)`
-   pair — meaning independent fetches of the same URL and independent LLM calls
-   converged on the same structured verdict.
-3. `contest_status` repeats the same pattern with the freelancer's counter-argument
+2. `gl.eq_principle.prompt_comparative` re-runs this closure across validators and
+   only accepts the result if they agree under the stated principle — independent
+   fetches of the same URL and independent LLM calls converge on the same
+   structured verdict.
+3. `contest_status` repeats the same pattern with the contester's counter-argument
    injected into the prompt, producing a fresh, independent consensus result.
 
-## Suggested tests (GenLayer Studio)
+```python
+def get_verdict() -> str:
+    page_text = gl.nondet.web.render(deliverable_url, mode="text")
+    prompt = self._evaluation_prompt(page_text, criteria)
+    raw = gl.nondet.exec_prompt(prompt, response_format="json")
+    return json.dumps(self._normalize_verdict(raw, criteria), sort_keys=True)
 
-- **Deploy**, then `post_job` with 2–3 concrete criteria (e.g. "must include a
-  working code sample", "must include a summary paragraph").
-- **Accepted case**: submit a URL whose content clearly satisfies all criteria,
-  assert `status == "accepted"`.
-- **Needs-revision case**: submit a URL missing one criterion, assert
-  `status == "needs_revision"` and the missing criterion appears in
-  `unmet_criteria`, and `revision_count` incremented.
-- **Resubmission**: call `submit_deliverable` again with an improved URL, assert
-  a new submission record exists under the incremented revision number.
-- **Contest — overturned**: contest a `rejected`/`needs_revision` status with a
-  strong argument (or an updated URL argument), assert `overturned == True` and
-  reputation `overturned` incremented for the contester.
-- **Contest — upheld**: contest a correctly-rejected deliverable weakly, assert
-  `overturned == False` and reputation `upheld` incremented.
-- **Duplicate job guard**: assert `post_job` reverts if `job_id` already exists.
+agreed = gl.eq_principle.prompt_comparative(
+    get_verdict,
+    principle="status must be exactly the same; unmet_criteria may differ in "
+              "wording only if they refer to the same underlying unmet criterion."
+)
+```
+
+## Verified on-chain test results
+
+All transactions below were executed live on GenLayer Studio and are visible on
+[the Explorer page for this contract](https://explorer-studio.genlayer.com/address/0x6CBD78377Ee9D0EE6B5D34A8eA3D709DaD53b991).
+
+| Step | Method | Tx Hash | Result |
+|---|---|---|---|
+| 1 | Deploy | `0xa9ed1cad...0c57fd40` | SUCCESS |
+| 2 | `post_job` (job1) | `0x672a6c39...b4208733` | SUCCESS |
+| 3 | `submit_deliverable` (job1, rev 0) | `0xba07c289...a1cc8754` | SUCCESS — `needs_revision`, missing a code snippet |
+| 4 | `submit_deliverable` (job1, rev 1) | `0x6068ce9a...546f32f6` | SUCCESS — `accepted`, all criteria met |
+| 5 | `post_job` (job2) | `0x39383328...8ced277f` | SUCCESS |
+| 6 | `submit_deliverable` (job2) | `0x2b823934...5b0f78ac` | SUCCESS — `rejected` (deliberately unsatisfiable French-language criterion) |
+| 7 | `contest_status` (job2) | `0x5291cb0d...dad87f0e` | SUCCESS — contest dismissed, `overturned: false` |
+
+Full test narrative and raw responses are in [TESTS.md](./TESTS.md).
+
+### What this demonstrates
+
+- A deliverable correctly moved from `needs_revision` to `accepted` after the
+  freelancer fixed the one genuinely missing criterion — validators did not just
+  rubber-stamp either submission, they identified the specific gap both times.
+- A deliberately unsatisfiable job (English content against a French-only
+  requirement) was correctly rejected, and a weak contest against that rejection
+  was correctly dismissed rather than blindly overturned — with the contester's
+  reputation `upheld` counter incrementing to reflect that.
+- Multiple validator rounds showed real GenLayer Optimistic Democracy behavior
+  (leader rotation on disagreement) rather than a single-model rubber stamp.
+
+## Suggested tests to reproduce (GenLayer Studio)
+
+- Deploy, then `post_job` with 2–3 concrete criteria.
+- Submit a URL missing one criterion — confirm `needs_revision` and the correct
+  `unmet_criteria` entry, and `revision_count` increments.
+- Resubmit an improved URL — confirm `accepted` and a new revision record exists.
+- Contest a rejected/needs_revision status with a weak argument — confirm
+  `overturned: false` and `upheld` reputation increments.
+- Contest with a materially different (better) URL/argument — confirm
+  `overturned: true` is possible when justified.
+- Assert `post_job` reverts on a duplicate `job_id`.
 
 ## Caveats
 

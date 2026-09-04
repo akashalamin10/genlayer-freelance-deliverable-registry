@@ -2,7 +2,7 @@
 
 All tests below were executed live on GenLayer Studio (not simulated locally).
 
-**Deployed contract:** `0x6C...b991` (see GenLayer Studio Explorer for full address)
+**Deployed contract:** `0x6CBD78377Ee9D0EE6B5D34A8eA3D709DaD53b991`
 **Network:** GenLayer Studio (studionet)
 **Test account:** `0x8F4F89D5fc40E3DB9ec5d52d5e181801FBcB4d48`
 
